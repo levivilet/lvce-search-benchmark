@@ -10,7 +10,7 @@ export interface SearchAdapter {
 
 export const adapters: Record<string, SearchAdapter> = {
   lvce: {
-    input: 'input[name="SearchValue"]',
+    input: 'textarea[name="SearchValue"]',
     results: '.TreeItems',
     row: '.TreeItems [role="treeitem"]',
     busy: '[role=progressbar], [aria-busy=true]',
@@ -31,7 +31,7 @@ export const adapters: Record<string, SearchAdapter> = {
     highlight: '.search-view .findMatch, .search-view .match, .search-view mark, .search-view [class*=Highlight], .search-view [class*=highlight]',
   },
   theia: {
-    input: '.search-widget input, input[placeholder*="Search"]',
+    input: '.search-widget input, .search-widget textarea, textarea[aria-label*="Search"]',
     results: '.search-container, .search-results, .monaco-list',
     row: '.search-container .monaco-list-row, .search-result, .search-file-match',
     busy: '[aria-busy=true], .search-container .progress-bit',
@@ -48,7 +48,8 @@ export interface SearchResultSample {
 
 export const waitForSearch = async (page: Page, adapter: SearchAdapter, query: string, expectedPath: string, timeoutMs = 30000): Promise<SearchResultSample> => {
   return await page.evaluate(({ adapter, query, expectedPath, timeoutMs }) => new Promise((resolve, reject) => {
-    const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(adapter.input)
+    const visible = (element: Element) => Boolean(element.getClientRects().length)
+    const input = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(adapter.input)].find(visible)
     if (!input) return reject(new Error(`Search input missing: ${adapter.input}`))
     const host = window as typeof window & { __searchBenchmarkStart?: number }
     const started = host.__searchBenchmarkStart ?? performance.now()
@@ -57,11 +58,13 @@ export const waitForSearch = async (page: Page, adapter: SearchAdapter, query: s
     let frame = 0
     const timeout = setTimeout(() => {
       cancelAnimationFrame(frame)
-      const rows = [...document.querySelectorAll(adapter.row)].map(row => row.textContent ?? '')
-      reject(new Error(`Search completion timeout: ${JSON.stringify({ query, value: input.value, rows: rows.length, sample: rows.slice(0, 5) })}`))
+      const allRows = [...document.querySelectorAll(adapter.row)].filter(visible)
+      const texts = allRows.map(row => row.textContent ?? '')
+      const expectedRows = allRows.filter(row => row.textContent?.toLowerCase().includes(expectedPath.toLowerCase()))
+      const diagnostic = { query, value: input.value, rows: texts.length, sample: texts.slice(0, 5), expectedHtml: expectedRows.slice(0, 2).map(row => row.outerHTML.slice(0, 1500)), highlights: allRows.flatMap(row => [...row.querySelectorAll(adapter.highlight)].map(element => ({ className: element.className, text: element.textContent }))).slice(0, 10), busy: [...document.querySelectorAll(adapter.busy)].filter(visible).map(element => element.outerHTML.slice(0, 500)), resultRoot: document.querySelector(adapter.results)?.outerHTML.slice(0, 500) }
+      reject(new Error(`Search completion timeout: ${JSON.stringify(diagnostic)}`))
     }, timeoutMs)
     const tick = () => {
-      const visible = (element: Element) => Boolean(element.getClientRects().length)
       const resultRoot = document.querySelector(adapter.results)
       const rows = [...document.querySelectorAll(adapter.row)].filter(visible)
       const texts = rows.map(row => row.textContent ?? '')
@@ -89,7 +92,7 @@ export async function search(page: Page, editor: string, query: string, expected
   if (!adapter) throw new Error(`No search adapter for ${editor}`)
   await page.keyboard.press('Escape').catch(() => {})
   await page.keyboard.press('Control+Shift+f')
-  const input = page.locator(adapter.input).first()
+  const input = page.locator(adapter.input).filter({ visible: true }).first()
   await input.waitFor({ state: 'visible', timeout: 15000 })
   await input.fill('')
   await page.evaluate(({ selector }) => {

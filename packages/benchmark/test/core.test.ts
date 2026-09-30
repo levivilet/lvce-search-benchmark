@@ -226,7 +226,7 @@ test('text search waits for a query-qualified expected result and rejects stale 
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent('<input name="SearchValue" value="QuickOpenModel"><div class="TreeItems"><div role="treeitem">src/vs/base/parts/quickopen/browser/quickOpenModel.ts <span class="Highlight">Quick</span></div></div>')
+    await page.setContent('<textarea name="SearchValue" style="display:none"></textarea><textarea name="SearchValue" value="QuickOpenModel">QuickOpenModel</textarea><div class="TreeItems"><div role="treeitem">src/vs/base/parts/quickopen/browser/quickOpenModel.ts <span class="Highlight">Quick</span></div></div>')
     const pending = waitForSearch(page, adapters.lvce, 'QuickOpenModel', 'src/vs/base/parts/quickopen/browser/quickOpenModel.ts', 2000)
     let settled = false
     void pending.then(() => { settled = true })
