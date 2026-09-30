@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
-import { waitForSearch, adapters } from '../src/adapters.ts'
+import { waitForSearch, search, adapters } from '../src/adapters.ts'
 import { rendererJavaScriptMs, summarize } from '../src/profiles.ts'
 import { cursorWelcomeValues, prepareCursorProfile, seedCursorWelcomeState } from '../src/cursor-profile.ts'
 import { render, statistics } from '../../report/src/render.ts'
@@ -227,6 +227,7 @@ test('text search waits for a query-qualified expected result and rejects stale 
   try {
     const page = await browser.newPage()
     await page.setContent('<textarea name="SearchValue" style="display:none"></textarea><textarea name="SearchValue" value="QuickOpenModel">QuickOpenModel</textarea><div class="TreeItems"><div role="treeitem">src/vs/base/parts/quickopen/browser/quickOpenModel.ts <span class="Highlight">Quick</span></div></div>')
+    await page.evaluate(() => { (window as any).__searchBenchmarkInput = document.querySelectorAll('textarea')[1] })
     const pending = waitForSearch(page, adapters.lvce, 'QuickOpenModel', 'src/vs/base/parts/quickopen/browser/quickOpenModel.ts', 2000)
     let settled = false
     void pending.then(() => { settled = true })
@@ -236,23 +237,32 @@ test('text search waits for a query-qualified expected result and rejects stale 
     const result = await pending
     assert.equal(result.query, 'QuickOpenModel')
     assert(result.milliseconds >= 100)
-    await page.evaluate(() => { document.querySelector('.Highlight')!.textContent = 'stale' })
+    await page.evaluate(() => { document.querySelector('.Highlight')!.textContent = 'stale'; (window as any).__searchBenchmarkInput.value = 'editorOptions' })
     await assert.rejects(waitForSearch(page, adapters.lvce, 'editorOptions', 'src/vs/base/parts/quickopen/browser/quickOpenModel.ts', 100), /timeout/)
   } finally { await browser.close() }
 })
-test('Theia search adapter identifies the visible text-search query field and results', () => {
-  assert.match(adapters.theia.input, /search-widget/)
+test('text search types into the focused visible control and ignores hidden editor inputs', async () => {
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
+  try {
+    const page = await browser.newPage()
+    await page.setContent('<textarea id="hidden" style="display:none"></textarea><textarea id="search"></textarea><div class="TreeItems"></div><script>document.addEventListener("keydown", event => { if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "f") document.querySelector("#search").focus() }); document.querySelector("#search").addEventListener("input", event => { const query = event.target.value; document.querySelector(".TreeItems").innerHTML = `<div role="treeitem">src/target.ts <span class="Highlight">${query}</span></div>` })</script>')
+    const result = await search(page, 'lvce', 'needle', 'src/target.ts')
+    assert.equal(result.query, 'needle')
+    assert.equal(result.rows, 1)
+    assert.equal(await page.locator('#hidden').inputValue(), '')
+    assert.equal(await page.locator('#search').inputValue(), 'needle')
+  } finally { await browser.close() }
+})
+test('Theia search adapter identifies text-search results', () => {
   assert.match(adapters.theia.row, /search-result/)
 })
 test('unsupported editors are not included in the search adapter matrix', () => {
   assert.deepEqual(Object.keys(adapters).sort(), ['cursor', 'lvce', 'theia', 'vscode'])
 })
-test('VS Code search adapter scopes inputs and busy state to the search view', () => {
-  assert.match(adapters.vscode.input, /search-view/)
+test('VS Code search adapter scopes busy state to the search view', () => {
   assert.match(adapters.vscode.busy, /search-view/)
 })
 test('LVCE search adapter requires the text-search result tree', () => {
-  assert.match(adapters.lvce.input, /SearchValue/)
   assert.match(adapters.lvce.row, /treeitem/)
 })
 test('Theia text search adapter reports query-qualified completion', async () => {
@@ -260,7 +270,8 @@ test('Theia text search adapter reports query-qualified completion', async () =>
   try {
     const page = await browser.newPage()
     await page.setContent('<input class="search-widget" value="needle"><div class="search-results"><div class="search-result">src/needle.ts <span class="highlight">needle</span></div></div>')
-    const adapter = { input: 'input.search-widget', results: '.search-results', row: '.search-result', busy: '[aria-busy=true]', highlight: '.highlight' }
+    const adapter = { results: '.search-results', row: '.search-result', busy: '[aria-busy=true]', highlight: '.highlight' }
+    await page.evaluate(() => { (window as any).__searchBenchmarkInput = document.querySelector('input') })
     const result = await waitForSearch(page, adapter, 'needle', 'src/needle.ts')
     assert.equal(result.query, 'needle')
     assert.equal(result.rows, 1)

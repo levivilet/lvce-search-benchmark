@@ -16,7 +16,7 @@ if (values.mode && !['latency', 'profile', 'render', 'paint'].includes(values.mo
 const fixture = JSON.parse(await readFile('.tmp/fixture.json', 'utf8'))
 const expectedCommit = '9df03c6d6ce97c6645c5846f6dfa2a6a7d276515'
 if (fixture.commit !== expectedCommit || execFileSync('git', ['-C', '.tmp/fixture', 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== expectedCommit || execFileSync('git', ['-C', '.tmp/fixture', 'status', '--porcelain'], { encoding: 'utf8' }).trim()) throw new Error('Fixture changed')
-const queries = [{ query: 'QuickOpenModel', expectedPath: 'src/vs/base/parts/quickopen/browser/quickOpenModel.ts' }, { query: 'editorOptions', expectedPath: 'src/vs/editor/common/config/editorOptions.ts' }]
+const queries = [{ query: 'export class QuickOpenModel', expectedPath: 'src/vs/base/parts/quickopen/browser/quickOpenModel.ts' }, { query: 'export interface IEditorOptions', expectedPath: 'src/vs/editor/common/config/editorOptions.ts' }]
 const fixturePaths = execFileSync('git', ['-C', '.tmp/fixture', 'ls-files'], { encoding: 'utf8' }).split('\n')
 for (const { expectedPath } of queries) {
   if (!fixturePaths.some(path => path.toLowerCase().endsWith(expectedPath.toLowerCase()))) throw new Error(`Missing expected fixture path ${expectedPath}`)
@@ -41,7 +41,13 @@ for (let repeat = 0; repeat < repeats; repeat++) {
       await app.page.screenshot({ path: `results/${key}.png` })
       trial.screenshot = `${key}.png`
       trial.status = 'passed'
-    } catch (error) { trial.error = String(error); console.error(key, error) }
+    } catch (error) {
+      trial.error = String(error)
+      if (app) {
+        try { await app.page.screenshot({ path: `results/${key}-failed.png`, fullPage: true }); trial.screenshot = `${key}-failed.png` } catch { /* Preserve the original benchmark failure. */ }
+      }
+      console.error(key, error)
+    }
     finally {
       await app?.close().catch(error => { trial.status = 'failed'; trial.cleanupError = String(error) })
     }
