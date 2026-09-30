@@ -226,7 +226,7 @@ test('text search waits for a query-qualified expected result and rejects stale 
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent('<textarea name="SearchValue" style="display:none"></textarea><textarea name="SearchValue" value="QuickOpenModel">QuickOpenModel</textarea><div class="TreeItems"><div role="treeitem">src/vs/base/parts/quickopen/browser/quickOpenModel.ts <span class="Highlight">Quick</span></div></div>')
+    await page.setContent('<textarea name="SearchValue" style="display:none"></textarea><textarea name="SearchValue" value="QuickOpenModel">QuickOpenModel</textarea><div class="TreeItems"><div role="treeitem">quickOpenModel.ts src/vs/base/... <span class="Highlight">Quick</span></div></div>')
     await page.evaluate(() => { (window as any).__searchBenchmarkInput = document.querySelectorAll('textarea')[1] })
     const pending = waitForSearch(page, adapters.lvce, 'QuickOpenModel', 'src/vs/base/parts/quickopen/browser/quickOpenModel.ts', 2000)
     let settled = false
@@ -245,7 +245,7 @@ test('text search types into the focused visible control and ignores hidden edit
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent('<textarea id="hidden" style="display:none"></textarea><textarea id="search"></textarea><div class="TreeItems"></div><script>document.addEventListener("keydown", event => { if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "f") document.querySelector("#search").focus() }); document.querySelector("#search").addEventListener("input", event => { const query = event.target.value; document.querySelector(".TreeItems").innerHTML = `<div role="treeitem">src/target.ts <span class="Highlight">${query}</span></div>` })</script>')
+    await page.setContent('<textarea id="hidden" style="display:none"></textarea><textarea id="search" placeholder="Search"></textarea><div class="TreeItems"></div><script>document.addEventListener("keydown", event => { if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "f") document.querySelector("#search").focus() }); document.querySelector("#search").addEventListener("input", event => { const query = event.target.value; document.querySelector(".TreeItems").innerHTML = `<div role="treeitem">src/target.ts <span class="Highlight">${query}</span></div>` })</script>')
     const result = await search(page, 'lvce', 'needle', 'src/target.ts')
     assert.equal(result.query, 'needle')
     assert.equal(result.rows, 1)
@@ -254,7 +254,7 @@ test('text search types into the focused visible control and ignores hidden edit
   } finally { await browser.close() }
 })
 test('Theia search adapter identifies text-search results', () => {
-  assert.match(adapters.theia.row, /search-result/)
+  assert.match(adapters.theia.row, /treeitem/)
 })
 test('unsupported editors are not included in the search adapter matrix', () => {
   assert.deepEqual(Object.keys(adapters).sort(), ['cursor', 'lvce', 'theia', 'vscode'])

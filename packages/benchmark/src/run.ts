@@ -33,7 +33,7 @@ for (let repeat = 0; repeat < repeats; repeat++) {
     try {
       app = await launch(editor, mode === 'profile', `results/${key}.log`, editor.id === 'cursor' ? 60000 : 30000)
       trial.sample = await search(app.page, editor.id, query, expectedPath)
-      if (mode !== 'paint') await app.page.keyboard.press('Escape')
+      if (mode !== 'paint' && !['cursor', 'theia'].includes(editor.id)) await app.page.keyboard.press('Escape')
       trial.readiness = await settleTargets(app.browser, editor.id)
       if (mode === 'profile') trial.profile = await profileWorkload(app, `results/${key}`, () => search(app!.page, editor.id, query, expectedPath))
       else if (mode === 'render') trial.rendering = await measureRenderingWorkload(app, `results/${key}.trace.json`, () => search(app!.page, editor.id, query, expectedPath))
