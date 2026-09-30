@@ -1,11 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
-import { arm, collect, adapters } from '../src/adapters.ts'
+import { waitForSearch, search, adapters } from '../src/adapters.ts'
+import { settleTargets } from '../src/readiness.ts'
 import { rendererJavaScriptMs, summarize } from '../src/profiles.ts'
 import { cursorWelcomeValues, prepareCursorProfile, seedCursorWelcomeState } from '../src/cursor-profile.ts'
 import { render, statistics } from '../../report/src/render.ts'
-import { launch, profileCapabilities, utilityInstrumentation } from '../src/launch.ts'
+import { launch } from '../src/launch.ts'
 import { createLegacyCdpProxy } from '../src/cdp-compat.ts'
 import { WebSocket, WebSocketServer } from 'ws'
 import { summarizeRenderingTrace } from '../src/rendering.ts'
@@ -51,10 +52,6 @@ test('statistics and report preserve unavailable data and escape external labels
   assert(fourEditors.includes('LVCE Editor × VS Code × Cursor × Eclipse Theia'))
   assert(fourEditors.includes('viewBox="0 0 640 300"'))
   assert(fourEditors.includes('Cursor 3.22.12'))
-  const fiveEditors = render({ created: 'today', editors: [{ id: 'lvce', name: 'LVCE Editor', version: '1' }, { id: 'vscode', name: 'VS Code', version: '1' }, { id: 'cursor', name: 'Cursor', version: '3.22.12' }, { id: 'theia', name: 'Eclipse Theia IDE', version: '1' }, { id: 'atom', name: 'Atom (archived)', version: '1.60.0' }], trials: [], repeats: 1, fixture: { commit: 'abc' } })
-  assert(fiveEditors.includes('LVCE Editor × VS Code × Cursor × Eclipse Theia IDE × Atom (archived)'))
-  assert(fiveEditors.includes('viewBox="0 0 640 365"'))
-  assert(fiveEditors.includes('Atom (archived) 1.60.0'))
 })
 test('Cursor welcome state is seeded repeat-safely without replacing unrelated profile state', async () => {
   const root = await mkdtemp(`${tmpdir()}/quickpick-cursor-state-`)
@@ -104,8 +101,8 @@ test('Cursor report includes its version, query statistics, screenshot, and raw 
     { id: 'cursor', name: 'Cursor', version: '3.22.12' },
     { id: 'theia', name: 'Eclipse Theia IDE', version: '1' },
   ], repeats: 1, fixture: { commit: 'abc' }, trials: [
-    { editor: 'cursor', mode: 'latency', status: 'passed', filename: 'quickOpenModel.ts', repeat: 0, samples: [{ milliseconds: 12 }, { milliseconds: 6 }], screenshot: 'cursor-latency.png' },
-    { editor: 'cursor', mode: 'profile', status: 'passed', filename: 'quickOpenModel.ts', repeat: 0, profile: { rendererJavaScriptMs: 2, frontendMs: 3, backendMs: 4, results: [{ side: 'frontend', identity: { type: 'page', targetId: 'cursor-page' }, file: 'cursor.cpuprofile' }] }, screenshot: 'cursor-profile.png' },
+    { editor: 'cursor', mode: 'latency', status: 'passed', query: 'QuickOpenModel', repeat: 0, sample: { milliseconds: 12 }, screenshot: 'cursor-latency.png' },
+    { editor: 'cursor', mode: 'profile', status: 'passed', query: 'QuickOpenModel', repeat: 0, profile: { rendererJavaScriptMs: 2, frontendMs: 3, backendMs: 4, results: [{ side: 'frontend', identity: { type: 'page', targetId: 'cursor-page' }, file: 'cursor.cpuprofile' }] }, screenshot: 'cursor-profile.png' },
   ] })
   assert(html.includes('Cursor 3.22.12'))
   assert(html.includes('12.00'))
@@ -116,7 +113,7 @@ test('Cursor report includes its version, query statistics, screenshot, and raw 
 test('report renders zero renderer activity and keeps missing renderer data unavailable', () => {
   const base = { created: 'today', editors: [{ id: 'lvce', name: 'LVCE', version: '1' }], repeats: 1, fixture: { commit: 'abc' } }
   const trials = (rendererJavaScriptMs?: number) => [
-    { editor: 'lvce', mode: 'latency', status: 'passed', repeat: 0, samples: [{ milliseconds: 0 }, { milliseconds: 0 }] },
+    { editor: 'lvce', mode: 'latency', status: 'passed', repeat: 0, sample: { milliseconds: 0 } },
     { editor: 'lvce', mode: 'profile', status: 'passed', repeat: 0, profile: { rendererJavaScriptMs, frontendMs: 0, backendMs: 0 } },
   ]
   const html = render({ ...base, trials: trials(0) })
@@ -219,83 +216,92 @@ test('paint report averages available trials, fills missing methods with zero, a
     { editor: 'lvce', mode: 'paint', status: 'failed', paintMetrics: { available: true, commands: [{ method: 'drawTextBlob', count: 99 }] } },
     { editor: 'other', mode: 'paint', status: 'passed', paintMetrics: { available: false, reason: 'No layers' } },
   ] })
-  assert(html.includes('Paint command breakdown'))
+  assert(html.includes('Paint instruction breakdown'))
   assert(html.includes('drawTextBlob</code></td><td>2.50</td><td>0</td><td>5</td>'))
   assert(html.includes('draw&lt;Rect&gt;'))
   assert(!html.includes('99'))
   assert(html.includes('Unavailable: no valid final content-layer snapshots'))
   assert(!html.includes('<script>LVCE</script>'))
 })
-test('current highlights distinguish unchanged filenames from stale results; timeout and page crash reject', async () => {
+test('text search waits for a query-qualified expected result and rejects stale or incomplete results', async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent('<input name="QuickPickInput" value="a"><div class="QuickPickItem"><div class="QuickPickItemLabel"><span class="QuickPickHighlight">a</span>bc.ts</div></div>')
-    await page.locator('input').focus()
-    await page.keyboard.press('End')
-    await arm(page, adapters.lvce, 'ab', 2000)
-    await page.keyboard.press('b')
-    await page.evaluate(() => { (window as any).settled = false; (window as any).quickpickSample.then(() => { (window as any).settled = true }) })
+    await page.setContent('<textarea name="SearchValue" style="display:none"></textarea><textarea name="SearchValue" value="QuickOpenModel">QuickOpenModel</textarea><div class="TreeItems"><div role="treeitem">quickOpenModel.ts src/vs/base/... <span class="Highlight">Quick</span></div></div>')
+    await page.evaluate(() => { (window as any).__searchBenchmarkInput = document.querySelectorAll('textarea')[1] })
+    const pending = waitForSearch(page, adapters.lvce, 'QuickOpenModel', 'src/vs/base/parts/quickopen/browser/quickOpenModel.ts', 2000)
+    let settled = false
+    void pending.then(() => { settled = true })
     await page.waitForTimeout(100)
-    assert.equal(await page.evaluate(() => (window as any).settled), false, 'Stale a highlight must not complete ab')
-    await page.evaluate(() => { document.querySelector('.QuickPickItemLabel')!.innerHTML = '<span class="QuickPickHighlight">ab</span>c.ts' })
-    const result = await collect(page)
-    assert.equal(result.rows[0].label, 'abc.ts')
-    assert.equal(result.query, 'ab')
+    assert.equal(settled, false, 'A partial stale highlight must not complete the query')
+    await page.evaluate(() => { document.querySelector('.Highlight')!.textContent = 'QuickOpenModel' })
+    const result = await pending
+    assert.equal(result.query, 'QuickOpenModel')
     assert(result.milliseconds >= 100)
-    await arm(page, adapters.lvce, 'abc', 150)
-    await page.keyboard.press('c')
-    await assert.rejects(collect(page), /timeout/)
-    // A timed-out observer must not consume or complete a subsequent trial.
-    await arm(page, adapters.lvce, 'abcd', 2000)
-    await page.keyboard.press('d')
-    const pending = collect(page)
-    const rejected = assert.rejects(pending, /closed|crash/i)
-    await page.close()
-    await rejected
+    await page.evaluate(() => { document.querySelector('.Highlight')!.textContent = 'stale'; (window as any).__searchBenchmarkInput.value = 'editorOptions' })
+    await assert.rejects(waitForSearch(page, adapters.lvce, 'editorOptions', 'src/vs/base/parts/quickopen/browser/quickOpenModel.ts', 100), /timeout/)
   } finally { await browser.close() }
 })
-test('Theia quick-open uses its query-qualified Monaco adapter', async () => {
+test('text search types into the focused visible control and ignores hidden editor inputs', async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent('<div class="quick-input-widget"><input aria-label="Search files by name" value=""></div><div class="quick-input-list"><div class="monaco-list-row"><span class="label-name"><span class="highlight"></span>est.ts</span></div></div>')
-    await page.evaluate(() => document.querySelector('input')!.addEventListener('input', event => { document.querySelector('.highlight')!.textContent = (event.target as HTMLInputElement).value }))
-    await page.locator('input').focus()
-    await arm(page, adapters.theia, 't')
-    await page.keyboard.press('t')
-    const result = await collect(page)
-    assert.equal(result.query, 't')
-    assert.equal(result.rows[0].label, 'test.ts')
+    await page.setContent('<textarea id="hidden" style="display:none"></textarea><textarea id="search" placeholder="Search"></textarea><div class="TreeItems"></div><script>document.addEventListener("keydown", event => { if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "f") document.querySelector("#search").focus() }); document.querySelector("#search").addEventListener("input", event => { const query = event.target.value; document.querySelector(".TreeItems").innerHTML = `<div role="treeitem">src/target.ts <span class="Highlight">${query}</span></div>` })</script>')
+    const result = await search(page, 'lvce', 'needle', 'src/target.ts')
+    assert.equal(result.query, 'needle')
+    assert.equal(result.rows, 1)
+    assert.equal(await page.locator('#hidden').inputValue(), '')
+    assert.equal(await page.locator('#search').inputValue(), 'needle')
   } finally { await browser.close() }
 })
-test('Atom fuzzy finder uses mini-editor text and only filename highlight spans', async () => {
+test('pasted search terms reach keyup-driven search controls on repeated searches', async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent('<div class="fuzzy-finder"><atom-text-editor><div class="line"></div><input class="hidden-input"></atom-text-editor><ol><li class="FuzzyFinderResult"><div class="primary-line"><span class="character-match"></span>uick.ts</div><div class="secondary-line"><span class="character-match">stale</span></div></li></ol></div>')
-    await page.evaluate(() => {
-      const input = document.querySelector<HTMLInputElement>('.hidden-input')!
-      input.focus()
-      document.addEventListener('keydown', event => {
-        if (event.key === 'q') {
-          document.querySelector('.line')!.innerHTML = '<span>q</span>'
-          document.querySelector('.primary-line .character-match')!.textContent = 'q'
-        }
-      })
-    })
-    await arm(page, adapters.atom, 'q')
-    await page.keyboard.press('q')
-    const result = await collect(page)
-    assert.equal(result.query, 'q')
-    assert.equal(result.rows[0].label, 'quick.ts')
-    assert.equal(result.rows[0].highlights, 'q')
+    await page.setContent(`<button id="shell-tab-search-view-container" role="tab" title="Search" style="display:none">Search</button><button role="tab" title="Search" style="display:none">Hidden inner tab</button><textarea id="search-input-field" placeholder="Search" style="display:none"></textarea><div id="search-in-workspace"></div><script>
+      const input = document.querySelector('textarea');
+      window.searchOpens = 0;
+      const tab = document.querySelector('[role=tab]');
+      setTimeout(() => { tab.style.display = 'block' }, 50);
+      tab.addEventListener('click', () => { window.searchOpens++; input.style.display = 'block'; input.focus() });
+      input.addEventListener('keyup', () => {
+        document.querySelector('#search-in-workspace').innerHTML = input.value ? '<div class="theia-TreeNode">target.ts <span class="match">' + input.value + '</span></div>' : '';
+      });
+    </script>`)
+    for (const query of ['first query', 'second query']) {
+      const result = await search(page, 'theia', query, 'src/target.ts')
+      assert.equal(result.query, query)
+      assert.equal(await page.locator('.match').textContent(), query)
+    }
+    assert.equal(await page.evaluate(() => (window as any).searchOpens), 1, 'Repeated measurement reuses the warmup control')
   } finally { await browser.close() }
 })
-test('Atom profile uses legacy fork instrumentation without assuming a utility process', () => {
-  assert.deepEqual(profileCapabilities.atom, { requireBackendProcess: false, requireRendererWorker: false, processApis: ['childProcessFork'], legacyRequire: true })
-  assert(utilityInstrumentation(profileCapabilities.atom).includes('child_process'))
-  assert(!profileCapabilities.atom.processApis.includes('utilityProcess'))
+test('Theia search adapter identifies text-search results', () => {
+  assert.match(adapters.theia.row, /theia-TreeNode/)
+})
+test('unsupported editors are not included in the search adapter matrix', () => {
+  assert.deepEqual(Object.keys(adapters).sort(), ['cursor', 'lvce', 'theia', 'vscode'])
+})
+test('VS Code search adapter scopes busy state to the search view', () => {
+  assert.match(adapters.vscode.busy, /search-view/)
+})
+test('LVCE search adapter requires the text-search result tree', () => {
+  assert.match(adapters.lvce.row, /treeitem/)
+})
+test('Theia text search adapter reports query-qualified completion', async () => {
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
+  try {
+    const page = await browser.newPage()
+    await page.setContent('<textarea placeholder="Search" value="needle">needle</textarea><div>src/needle.ts <span class="match">needle</span></div><div id="search-in-workspace"></div>')
+    await page.evaluate(() => { (window as any).__searchBenchmarkInput = document.querySelector('textarea') })
+    await assert.rejects(waitForSearch(page, adapters.theia, 'needle', 'src/needle.ts', 100), /timeout/)
+    await page.locator('#search-in-workspace').evaluate(element => { element.innerHTML = '<div class="theia-TreeNode">src/needle.ts <span class="match">needle</span></div><div class="theia-progress-bar">Searching</div>' })
+    await assert.rejects(waitForSearch(page, adapters.theia, 'needle', 'src/needle.ts', 100), /timeout/)
+    await page.locator('.theia-progress-bar').evaluate(element => { (element as HTMLElement).style.display = 'none' })
+    const result = await waitForSearch(page, adapters.theia, 'needle', 'src/needle.ts')
+    assert.equal(result.query, 'needle')
+    assert.equal(result.rows, 1)
+  } finally { await browser.close() }
 })
 test('legacy CDP proxy absorbs only Playwright download behavior and forwards other commands', async () => {
   const upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 })
@@ -348,4 +354,29 @@ test('startup failure and timeout dispose the isolated profile and detached chil
     assert.equal(running, false, 'detached descendants must be stopped before profile cleanup')
     assert.deepEqual((await readdir(tmpdir())).filter(x => x.startsWith('quickpick-benchmark-test-cleanup-')).sort(), before)
   } finally { await rm('.tmp/apps/test-cleanup', { recursive: true, force: true }); await rm(marker, { force: true }) }
+})
+
+test('VS Code readiness waits for the lazy syntax worker beyond an initially stable target set', async () => {
+  const start = performance.now()
+  let detached = false
+  const page = { type: 'page', targetId: 'page', title: 'fixture' }
+  const worker = { type: 'worker', targetId: 'worker', title: 'TextMateWorker' }
+  const browser = { newBrowserCDPSession: async () => ({
+    send: async () => ({ targetInfos: performance.now() - start < 800 ? [page] : [page, worker] }),
+    detach: async () => { detached = true },
+  }) }
+  const result = await settleTargets(browser as any, 'vscode')
+  assert(result.targets.some(target => target.targetId === worker.targetId))
+  assert.equal(detached, true)
+})
+
+test('Cursor profile readiness includes its delayed terminal host', async () => {
+  const start = performance.now()
+  const browser = { newBrowserCDPSession: async () => ({
+    send: async () => ({ targetInfos: [{ type: 'page', targetId: 'page', title: 'fixture' }] }),
+    detach: async () => {},
+  }) }
+  const main = { send: async () => ({ result: { value: performance.now() - start < 800 ? [] : [{ pid: 42, serviceName: 'ptyHost-8' }] } }) }
+  const result = await settleTargets(browser as any, 'cursor', main as any)
+  assert(result.milliseconds >= 800, 'A stable renderer alone does not establish backend readiness')
 })

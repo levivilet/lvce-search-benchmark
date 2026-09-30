@@ -1,86 +1,135 @@
 import type { Page } from 'playwright'
-export interface Selectors { input: string; row: string; label: string; highlight: string; busy: string; text?: string }
-export const adapters: Record<string, Selectors> = {
-  lvce: { input: 'input[name="QuickPickInput"]', row: '.QuickPickItem', label: '.QuickPickItemLabel', highlight: '.QuickPickHighlight', busy: '[role=progressbar], [aria-busy=true]' },
-  vscode: { input: '.quick-input-widget input', row: '.quick-input-list .monaco-list-row', label: '.label-name', highlight: '.label-name .highlight', busy: '.quick-input-widget .monaco-progress-container.active' },
-  cursor: { input: '.quick-input-widget input[type="text"]', row: '.quick-input-list .monaco-list-row', label: '.label-name', highlight: '.label-name .highlight', busy: '.quick-input-widget .monaco-progress-container.active' },
-  theia: { input: '.quick-input-widget input', row: '.quick-input-list .monaco-list-row', label: '.label-name', highlight: '.label-name .highlight', busy: '.quick-input-widget .monaco-progress-container.active' },
-  atom: { input: '.fuzzy-finder atom-text-editor .hidden-input', row: '.fuzzy-finder .FuzzyFinderResult', label: '.primary-line', highlight: '.primary-line .character-match', busy: '.fuzzy-finder .loading', text: '.fuzzy-finder atom-text-editor .line' },
+
+export interface SearchAdapter {
+  results: string
+  row: string
+  busy: string
+  highlight: string
 }
-// Runs wholly in the renderer: trusted keydown to query-qualified DOM + two frames.
-// The query is checked again on each frame, so stale/unchanged filenames cannot end a sample.
-export async function arm(page: Page, selectors: Selectors, query: string, timeoutMs = 15000): Promise<void> {
-  await page.evaluate(({ selectors, query, timeoutMs }) => {
-    const host = window as unknown as { quickpickSample: Promise<unknown> }
-    host.quickpickSample = new Promise((resolve, reject) => {
-      let started: number | undefined
-      let frame = 0
-      let done = false
-      let consecutive = 0
-      const clean = () => { done = true; clearTimeout(timer); cancelAnimationFrame(frame); document.removeEventListener('keydown', keydown, true) }
-      const timer = setTimeout(() => {
-        const input = document.querySelector<HTMLInputElement>(selectors.input)
-        const value = selectors.text ? document.querySelector(selectors.text)?.textContent?.trimEnd() : input?.value
-        const state = { started: started !== undefined, value, visible: Boolean(input?.getClientRects().length), focused: document.activeElement === input, rows: document.querySelectorAll(selectors.row).length, busy: [...document.querySelectorAll(selectors.busy)].some(el => Boolean(el.getClientRects().length)) }
-        clean()
-        reject(new Error(`Quickpick update timeout: ${query} (${JSON.stringify(state)})`))
-      }, timeoutMs)
-      const keydown = (event: KeyboardEvent) => {
-        if (!event.isTrusted || event.key === 'Control') return
-        if (started === undefined) {
-          started = performance.now()
-          const traffic = (window as any).__quickpickTraffic
-          if (traffic) { traffic.begin(); document.dispatchEvent(new Event('__quickpickTrafficBegin')) }
-        }
-      }
-      document.addEventListener('keydown', keydown, true)
-      const tick = () => {
-        if (done) return
-        const input = document.querySelector<HTMLInputElement>(selectors.input)
-        const visible = (el: Element) => Boolean(el.getClientRects().length)
-        const rows = [...document.querySelectorAll(selectors.row)].filter(visible)
-        const busy = [...document.querySelectorAll(selectors.busy)].some(visible)
-        const matched = rows.some(row => [...row.querySelectorAll(selectors.highlight)].map(x => x.textContent).join('').toLowerCase() === query.toLowerCase())
-        const value = selectors.text ? document.querySelector(selectors.text)?.textContent?.trimEnd() : input?.value
-        const ready = started !== undefined && input && visible(input) && document.activeElement === input && value === query && !busy && (query === '' || matched)
-        consecutive = ready ? consecutive + 1 : 0
-        if (consecutive >= 2) {
-          const traffic = (window as any).__quickpickTraffic
-          if (traffic) { traffic.end(); document.dispatchEvent(new Event('__quickpickTrafficEnd')) }
-          clean()
-          resolve({ query, milliseconds: performance.now() - started!, rows: rows.map(row => ({ label: row.querySelector(selectors.label)?.textContent, text: row.textContent, highlights: [...row.querySelectorAll(selectors.highlight)].map(x => x.textContent).join('') })) })
-          return
-        }
-        frame = requestAnimationFrame(tick)
+
+export const adapters: Record<string, SearchAdapter> = {
+  lvce: {
+    results: '.TreeItems',
+    row: '.TreeItems [role="treeitem"]',
+    busy: '[role=progressbar], [aria-busy=true]',
+    highlight: '.Highlight, .SearchHighlight, [class*=Highlight], [class*=highlight], mark',
+  },
+  vscode: {
+    results: '.search-view .search-results, .search-view .monaco-list',
+    row: '.search-view .monaco-list-row, .search-view .filematch, .search-view .match',
+    busy: '.search-view [aria-busy=true], .search-view .progress-bit',
+    highlight: '.search-view .findMatch, .search-view .match, .search-view mark, .search-view [class*=Highlight], .search-view [class*=highlight]',
+  },
+  cursor: {
+    results: '.search-view .search-results, .search-view .monaco-list',
+    row: '.search-view .monaco-list-row, .search-view .filematch, .search-view .match',
+    busy: '.search-view [aria-busy=true], .search-view .progress-bit',
+    highlight: '.search-view .findMatch, .search-view .match, .search-view mark, .search-view [class*=Highlight], .search-view [class*=highlight]',
+  },
+  theia: {
+    results: '#search-in-workspace',
+    row: '#search-in-workspace .theia-TreeNode',
+    busy: '#search-in-workspace [aria-busy=true], #search-in-workspace [role=progressbar], #search-in-workspace .theia-progress-bar',
+    highlight: '.match',
+  },
+}
+
+export interface SearchResultSample {
+  query: string
+  milliseconds: number
+  resultText: string
+  rows: number
+}
+
+export const waitForSearch = async (page: Page, adapter: SearchAdapter, query: string, expectedPath: string, timeoutMs = 30000): Promise<SearchResultSample> => {
+  return await page.evaluate(({ adapter, query, expectedPath, timeoutMs }) => new Promise((resolve, reject) => {
+    const visible = (element: Element) => Boolean(element.getClientRects().length)
+    const expectedName = expectedPath.split('/').at(-1)!.toLowerCase()
+    const host = window as typeof window & { __searchBenchmarkStart?: number; __searchBenchmarkInput?: HTMLInputElement | HTMLTextAreaElement }
+    const input = host.__searchBenchmarkInput
+    if (!input) return reject(new Error('Search input missing: focused input was not recorded'))
+    const started = host.__searchBenchmarkStart ?? performance.now()
+    let previous = ''
+    let stableFrames = 0
+    let frame = 0
+    const timeout = setTimeout(() => {
+      cancelAnimationFrame(frame)
+      const allRows = [...document.querySelectorAll(adapter.row)].filter(visible)
+      const texts = allRows.map(row => row.textContent ?? '')
+      const expectedRows = allRows.filter(row => `${row.textContent ?? ''} ${row.getAttribute('aria-label') ?? ''} ${row.getAttribute('title') ?? ''}`.toLowerCase().includes(expectedName))
+      const fields = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input,textarea')].filter(visible).map(element => ({ tag: element.tagName, type: element.getAttribute('type'), name: element.getAttribute('name'), aria: element.getAttribute('aria-label'), placeholder: element.getAttribute('placeholder'), className: element.className, value: element.value }))
+      const diagnostic = { query, value: input.value, rows: texts.length, sample: texts.slice(0, 5), expectedHtml: expectedRows.slice(0, 2).map(row => row.outerHTML.slice(0, 1500)), highlights: allRows.flatMap(row => [...row.querySelectorAll(adapter.highlight)].map(element => ({ className: element.className, text: element.textContent }))).slice(0, 10), busy: [...document.querySelectorAll(adapter.busy)].filter(visible).map(element => element.outerHTML.slice(0, 500)), resultRoot: document.querySelector(adapter.results)?.outerHTML.slice(0, 500), active: document.activeElement instanceof HTMLElement ? document.activeElement.outerHTML.slice(0, 500) : null, fields }
+      reject(new Error(`Search completion timeout: ${JSON.stringify(diagnostic)}`))
+    }, timeoutMs)
+    const tick = () => {
+      const resultRoot = document.querySelector(adapter.results)
+      const rows = [...document.querySelectorAll(adapter.row)].filter(visible)
+      const rowTexts = rows.map(row => `${row.textContent ?? ''} ${row.getAttribute('aria-label') ?? ''} ${row.getAttribute('title') ?? ''}`)
+      const expected = rowTexts.find(text => text.toLowerCase().includes(expectedName))
+      const highlightNodes = rows.flatMap(row => [...row.querySelectorAll(adapter.highlight)])
+      const highlightedQuery = highlightNodes.some(element => visible(element) && element.textContent?.toLowerCase().includes(query.toLowerCase()))
+      const busy = [...document.querySelectorAll(adapter.busy)].some(visible)
+      const signature = rowTexts.join('\n')
+      const ready = input.value === query && resultRoot && visible(resultRoot) && expected && highlightedQuery && !busy
+      stableFrames = ready && signature === previous ? stableFrames + 1 : 0
+      previous = signature
+      if (stableFrames >= 2) {
+        clearTimeout(timeout)
+        cancelAnimationFrame(frame)
+        resolve({ query, milliseconds: performance.now() - started, resultText: expected!, rows: rows.length })
+        return
       }
       frame = requestAnimationFrame(tick)
-    })
-    // Retrieval happens after key dispatch; retain rejection without an unhandled page error.
-    host.quickpickSample.catch(() => {})
-  }, { selectors, query, timeoutMs })
+    }
+    frame = requestAnimationFrame(tick)
+  }), { adapter, query, expectedPath, timeoutMs })
 }
-export interface Sample { query: string; milliseconds: number; rows: { label: string; text: string; highlights: string }[] }
-export const collect = (page: Page): Promise<Sample> => page.evaluate(() => (window as any).quickpickSample)
-export async function search(page: Page, editor: string, filename: string): Promise<Sample[]> {
-  const selectors = adapters[editor]
-  const input = page.locator(selectors.input)
-  if (await input.isVisible()) {
-    await page.keyboard.press('Escape')
-    await input.waitFor({ state: 'hidden' })
+
+export async function search(page: Page, editor: string, query: string, expectedPath: string): Promise<SearchResultSample> {
+  const adapter = adapters[editor]
+  if (!adapter) throw new Error(`No search adapter for ${editor}`)
+  // Reopening an already focused Theia view schedules an asynchronous search-term
+  // reset. Reuse the warmup control so that reset cannot race the measured input.
+  const reuseInput = ['vscode', 'theia'].includes(editor) && await page.evaluate(() => {
+    const input = (window as typeof window & { __searchBenchmarkInput?: HTMLInputElement | HTMLTextAreaElement }).__searchBenchmarkInput
+    if (!input?.isConnected || !input.getClientRects().length) return false
+    input.focus()
+    return true
+  })
+  if (!reuseInput) {
+    if (!['vscode', 'theia'].includes(editor)) await page.keyboard.press('Escape').catch(() => {})
+    if (editor === 'theia') {
+      // The visible tab is a startup-readiness boundary; keyboard shortcuts can
+      // arrive before Theia has finished activating its welcome workspace.
+      await page.locator('#shell-tab-search-view-container').click()
+      await page.locator('#search-input-field').focus()
+    } else if (editor === 'cursor') {
+      await page.keyboard.press('Control+Shift+p')
+      await page.keyboard.insertText('Search: Find in Files')
+      await page.getByText('Search: Find in Files', { exact: true }).first().click()
+    } else {
+      await page.keyboard.press('Control+Shift+f')
+    }
   }
-  if (editor === 'theia') {
-    await page.bringToFront()
-    await page.locator('.theia-ApplicationShell').click({ position: { x: 20, y: 20 } })
-  }
-  await arm(page, selectors, '')
-  await page.keyboard.press('Control+p')
-  await input.waitFor({ state: 'visible' })
-  const samples = [await collect(page)]
-  for (let index = 0; index < filename.length; index++) {
-    await arm(page, selectors, filename.slice(0, index + 1))
-    await page.keyboard.press(filename[index])
-    samples.push(await collect(page))
-  }
-  if (!samples.at(-1)!.rows.some(row => row.label === filename)) throw new Error(`Expected fixture file missing: ${filename}`)
-  return samples
+  await page.waitForFunction(() => {
+    const element = document.activeElement
+    return (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) && Boolean(element.getClientRects().length) && /search/i.test(`${element.getAttribute('aria-label') ?? ''} ${element.getAttribute('placeholder') ?? ''} ${element.getAttribute('title') ?? ''}`)
+  }, undefined, { timeout: 15000 }).catch(async error => {
+    const fields = await page.locator('input,textarea').evaluateAll(elements => elements.filter(element => Boolean(element.getClientRects().length)).map(element => ({ tag: element.tagName, aria: element.getAttribute('aria-label'), placeholder: element.getAttribute('placeholder'), className: element.className, value: (element as HTMLInputElement).value })))
+    throw new Error(`Search shortcut did not focus a visible text field in ${editor}: ${String(error)}; visible fields=${JSON.stringify(fields)}`)
+  })
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Backspace')
+  await page.evaluate(() => {
+    const element = document.activeElement
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) throw new Error('Active search control is not a text input')
+    const host = window as typeof window & { __searchBenchmarkStart?: number; __searchBenchmarkInput?: HTMLInputElement | HTMLTextAreaElement }
+    host.__searchBenchmarkInput = element
+    host.__searchBenchmarkStart = undefined
+    element.addEventListener('input', () => { host.__searchBenchmarkStart = performance.now() }, { once: true })
+  })
+  await page.keyboard.insertText(query)
+  // Theia commits its search term on keyup, including after a paste.
+  await page.keyboard.press('ArrowRight')
+  return await waitForSearch(page, adapter, query, expectedPath)
 }
