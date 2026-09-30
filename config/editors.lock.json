@@ -1,0 +1,47 @@
+[
+  {
+    "id": "lvce",
+    "name": "LVCE Editor",
+    "version": "v0.116.0",
+    "archive": "lvce-v0.116.0_amd64.deb",
+    "url": "https://github.com/lvce-editor/lvce-editor/releases/download/v0.116.0/lvce-v0.116.0_amd64.deb",
+    "sha256": "bae5e3b8f80faceb04229572c7506186b27f691afac2e0612b64ab51a8f1a22f",
+    "binary": "usr/lib/lvce/lvce"
+  },
+  {
+    "id": "vscode",
+    "name": "VS Code",
+    "version": "1.136.2",
+    "archive": "vscode.tar.gz",
+    "url": "https://vscode.download.prss.microsoft.com/dbazure/download/stable/88e44fa0e00b08f7758b4f6d05632e4fd5e4df6f/code-stable-x64-1788561485.tar.gz",
+    "sha256": "2bab551c3677d33010e317a7845e61d2f0fa0c80f8518399c42e0f941f64f18f",
+    "binary": "VSCode-linux-x64/code"
+  },
+  {
+    "id": "cursor",
+    "name": "Cursor",
+    "version": "3.22.12",
+    "archive": "cursor_3.22.12_amd64.deb",
+    "url": "https://downloads.cursor.com/production/3a92974361033b2051526321308c2740fe5912c5/linux/x64/deb/amd64/deb/cursor_3.22.12_amd64.deb",
+    "sha256": "8b9198f7dde79f7e27cc83dabf3c66a93ca5303b6919719100c82f29d9498a65",
+    "binary": "usr/share/cursor/cursor"
+  },
+  {
+    "id": "theia",
+    "name": "Eclipse Theia IDE",
+    "version": "1.75.0.117",
+    "archive": "TheiaIDE.AppImage",
+    "url": "https://download.eclipse.org/theia/ide/1.75.0/linux/TheiaIDE.AppImage",
+    "sha256": "f1eb94544230f1b44c124d40a1e437ef6c81ae91c62e37b11f4f9d168a8d7358",
+    "binary": "squashfs-root/theia-ide-electron-app.bin"
+  },
+  {
+    "id": "atom",
+    "name": "Atom (archived)",
+    "version": "1.60.0",
+    "archive": "atom-amd64.deb",
+    "url": "https://github.com/atom/atom/releases/download/v1.60.0/atom-amd64.deb",
+    "sha256": "5c7c0259062b9d4911d2537bfceaff5316f9de111698840a90d7cd497df891a6",
+    "binary": "usr/share/atom/atom"
+  }
+]
