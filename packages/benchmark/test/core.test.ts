@@ -258,10 +258,12 @@ test('pasted search terms reach keyup-driven search controls on repeated searche
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent(`<textarea placeholder="Search"></textarea><div id="search-in-workspace"></div><script>
+    await page.setContent(`<button id="shell-tab-search-view-container" role="tab" title="Search" style="display:none">Search</button><button role="tab" title="Search" style="display:none">Hidden inner tab</button><textarea id="search-input-field" placeholder="Search" style="display:none"></textarea><div id="search-in-workspace"></div><script>
       const input = document.querySelector('textarea');
       window.searchOpens = 0;
-      document.addEventListener('keydown', event => { if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'f') { window.searchOpens++; input.focus() } });
+      const tab = document.querySelector('[role=tab]');
+      setTimeout(() => { tab.style.display = 'block' }, 50);
+      tab.addEventListener('click', () => { window.searchOpens++; input.style.display = 'block'; input.focus() });
       input.addEventListener('keyup', () => {
         document.querySelector('#search-in-workspace').innerHTML = input.value ? '<div class="theia-TreeNode">target.ts <span class="match">' + input.value + '</span></div>' : '';
       });

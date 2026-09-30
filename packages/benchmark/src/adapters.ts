@@ -98,7 +98,12 @@ export async function search(page: Page, editor: string, query: string, expected
   })
   if (!reuseInput) {
     if (!['vscode', 'theia'].includes(editor)) await page.keyboard.press('Escape').catch(() => {})
-    if (editor === 'cursor') {
+    if (editor === 'theia') {
+      // The visible tab is a startup-readiness boundary; keyboard shortcuts can
+      // arrive before Theia has finished activating its welcome workspace.
+      await page.locator('#shell-tab-search-view-container').click()
+      await page.locator('#search-input-field').focus()
+    } else if (editor === 'cursor') {
       await page.keyboard.press('Control+Shift+p')
       await page.keyboard.insertText('Search: Find in Files')
       await page.getByText('Search: Find in Files', { exact: true }).first().click()
