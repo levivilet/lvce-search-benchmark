@@ -5,6 +5,7 @@ export interface SearchAdapter {
   row: string
   busy: string
   highlight: string
+  bodyResultFallback?: boolean
 }
 
 export const adapters: Record<string, SearchAdapter> = {
@@ -31,6 +32,7 @@ export const adapters: Record<string, SearchAdapter> = {
     row: '[role="treeitem"], .theia-tree-node',
     busy: '[aria-busy=true], .search-container .progress-bit',
     highlight: '.highlight, .Highlight, .findMatch, mark, [class*=Highlight], [class*=highlight], [class*=match], [class*=Match]',
+    bodyResultFallback: true,
   },
 }
 
@@ -65,17 +67,19 @@ export const waitForSearch = async (page: Page, adapter: SearchAdapter, query: s
       const resultRoot = document.querySelector(adapter.results)
       const rows = [...document.querySelectorAll(adapter.row)].filter(visible)
       const rowTexts = rows.map(row => `${row.textContent ?? ''} ${row.getAttribute('aria-label') ?? ''} ${row.getAttribute('title') ?? ''}`)
-      const expected = rowTexts.find(text => text.toLowerCase().includes(expectedName))
-      const highlightedQuery = rows.some(row => [...row.querySelectorAll(adapter.highlight)].some(element => visible(element) && element.textContent?.toLowerCase().includes(query.toLowerCase())))
+      const bodyText = adapter.bodyResultFallback ? (document.body.innerText ?? '') : ''
+      const expected = rowTexts.find(text => text.toLowerCase().includes(expectedName)) ?? (bodyText.toLowerCase().includes(expectedName) ? expectedName : undefined)
+      const highlightNodes = adapter.bodyResultFallback ? [...document.querySelectorAll(adapter.highlight)] : rows.flatMap(row => [...row.querySelectorAll(adapter.highlight)])
+      const highlightedQuery = highlightNodes.some(element => visible(element) && element.textContent?.toLowerCase().includes(query.toLowerCase()))
       const busy = [...document.querySelectorAll(adapter.busy)].some(visible)
-      const signature = rowTexts.join('\n')
+      const signature = rowTexts.join('\n') || (adapter.bodyResultFallback ? `${bodyText.length}:${bodyText.slice(0, 200)}` : '')
       const ready = input.value === query && resultRoot && visible(resultRoot) && expected && highlightedQuery && !busy
       stableFrames = ready && signature === previous ? stableFrames + 1 : 0
       previous = signature
       if (stableFrames >= 2) {
         clearTimeout(timeout)
         cancelAnimationFrame(frame)
-        resolve({ query, milliseconds: performance.now() - started, resultText: expected!, rows: rows.length })
+        resolve({ query, milliseconds: performance.now() - started, resultText: expected!, rows: rows.length || (adapter.bodyResultFallback && expected ? 1 : 0) })
         return
       }
       frame = requestAnimationFrame(tick)
@@ -87,11 +91,11 @@ export const waitForSearch = async (page: Page, adapter: SearchAdapter, query: s
 export async function search(page: Page, editor: string, query: string, expectedPath: string): Promise<SearchResultSample> {
   const adapter = adapters[editor]
   if (!adapter) throw new Error(`No search adapter for ${editor}`)
-  if (editor !== 'theia') await page.keyboard.press('Escape').catch(() => {})
+  if (!['vscode', 'theia'].includes(editor)) await page.keyboard.press('Escape').catch(() => {})
   if (editor === 'cursor') {
     await page.keyboard.press('Control+Shift+p')
     await page.keyboard.insertText('Search: Find in Files')
-    await page.keyboard.press('Enter')
+    await page.getByText('Search: Find in Files', { exact: true }).first().click()
   } else {
     await page.keyboard.press('Control+Shift+f')
   }

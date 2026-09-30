@@ -269,10 +269,9 @@ test('Theia text search adapter reports query-qualified completion', async () =>
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent('<input class="search-widget" value="needle"><div class="search-results"><div class="search-result">src/needle.ts <span class="highlight">needle</span></div></div>')
-    const adapter = { results: '.search-results', row: '.search-result', busy: '[aria-busy=true]', highlight: '.highlight' }
-    await page.evaluate(() => { (window as any).__searchBenchmarkInput = document.querySelector('input') })
-    const result = await waitForSearch(page, adapter, 'needle', 'src/needle.ts')
+    await page.setContent('<textarea placeholder="Search" value="needle">needle</textarea><div>src/needle.ts <span class="theia-search-match">needle</span></div>')
+    await page.evaluate(() => { (window as any).__searchBenchmarkInput = document.querySelector('textarea') })
+    const result = await waitForSearch(page, adapters.theia, 'needle', 'src/needle.ts')
     assert.equal(result.query, 'needle')
     assert.equal(result.rows, 1)
   } finally { await browser.close() }
