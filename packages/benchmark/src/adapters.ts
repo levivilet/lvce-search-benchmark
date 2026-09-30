@@ -5,7 +5,6 @@ export interface SearchAdapter {
   row: string
   busy: string
   highlight: string
-  bodyResultFallback?: boolean
 }
 
 export const adapters: Record<string, SearchAdapter> = {
@@ -28,11 +27,10 @@ export const adapters: Record<string, SearchAdapter> = {
     highlight: '.search-view .findMatch, .search-view .match, .search-view mark, .search-view [class*=Highlight], .search-view [class*=highlight]',
   },
   theia: {
-    results: 'body',
-    row: '[role="treeitem"], .theia-tree-node',
-    busy: '[aria-busy=true], .search-container .progress-bit',
-    highlight: '.highlight, .Highlight, .findMatch, mark, [class*=Highlight], [class*=highlight], [class*=match], [class*=Match]',
-    bodyResultFallback: true,
+    results: '#search-in-workspace',
+    row: '#search-in-workspace .theia-TreeNode',
+    busy: '#search-in-workspace [aria-busy=true], #search-in-workspace [role=progressbar], #search-in-workspace .theia-progress-bar',
+    highlight: '.match',
   },
 }
 
@@ -67,19 +65,18 @@ export const waitForSearch = async (page: Page, adapter: SearchAdapter, query: s
       const resultRoot = document.querySelector(adapter.results)
       const rows = [...document.querySelectorAll(adapter.row)].filter(visible)
       const rowTexts = rows.map(row => `${row.textContent ?? ''} ${row.getAttribute('aria-label') ?? ''} ${row.getAttribute('title') ?? ''}`)
-      const bodyText = adapter.bodyResultFallback ? (document.body.innerText ?? '') : ''
-      const expected = rowTexts.find(text => text.toLowerCase().includes(expectedName)) ?? (bodyText.toLowerCase().includes(expectedName) ? expectedName : undefined)
-      const highlightNodes = adapter.bodyResultFallback ? [...document.querySelectorAll(adapter.highlight)] : rows.flatMap(row => [...row.querySelectorAll(adapter.highlight)])
+      const expected = rowTexts.find(text => text.toLowerCase().includes(expectedName))
+      const highlightNodes = rows.flatMap(row => [...row.querySelectorAll(adapter.highlight)])
       const highlightedQuery = highlightNodes.some(element => visible(element) && element.textContent?.toLowerCase().includes(query.toLowerCase()))
       const busy = [...document.querySelectorAll(adapter.busy)].some(visible)
-      const signature = rowTexts.join('\n') || (adapter.bodyResultFallback ? `${bodyText.length}:${bodyText.slice(0, 200)}` : '')
+      const signature = rowTexts.join('\n')
       const ready = input.value === query && resultRoot && visible(resultRoot) && expected && highlightedQuery && !busy
       stableFrames = ready && signature === previous ? stableFrames + 1 : 0
       previous = signature
       if (stableFrames >= 2) {
         clearTimeout(timeout)
         cancelAnimationFrame(frame)
-        resolve({ query, milliseconds: performance.now() - started, resultText: expected!, rows: rows.length || (adapter.bodyResultFallback && expected ? 1 : 0) })
+        resolve({ query, milliseconds: performance.now() - started, resultText: expected!, rows: rows.length })
         return
       }
       frame = requestAnimationFrame(tick)
@@ -91,13 +88,23 @@ export const waitForSearch = async (page: Page, adapter: SearchAdapter, query: s
 export async function search(page: Page, editor: string, query: string, expectedPath: string): Promise<SearchResultSample> {
   const adapter = adapters[editor]
   if (!adapter) throw new Error(`No search adapter for ${editor}`)
-  if (!['vscode', 'theia'].includes(editor)) await page.keyboard.press('Escape').catch(() => {})
-  if (editor === 'cursor') {
-    await page.keyboard.press('Control+Shift+p')
-    await page.keyboard.insertText('Search: Find in Files')
-    await page.getByText('Search: Find in Files', { exact: true }).first().click()
-  } else {
-    await page.keyboard.press('Control+Shift+f')
+  // Reopening an already focused Theia view schedules an asynchronous search-term
+  // reset. Reuse the warmup control so that reset cannot race the measured input.
+  const reuseInput = ['vscode', 'theia'].includes(editor) && await page.evaluate(() => {
+    const input = (window as typeof window & { __searchBenchmarkInput?: HTMLInputElement | HTMLTextAreaElement }).__searchBenchmarkInput
+    if (!input?.isConnected || !input.getClientRects().length) return false
+    input.focus()
+    return true
+  })
+  if (!reuseInput) {
+    if (!['vscode', 'theia'].includes(editor)) await page.keyboard.press('Escape').catch(() => {})
+    if (editor === 'cursor') {
+      await page.keyboard.press('Control+Shift+p')
+      await page.keyboard.insertText('Search: Find in Files')
+      await page.getByText('Search: Find in Files', { exact: true }).first().click()
+    } else {
+      await page.keyboard.press('Control+Shift+f')
+    }
   }
   await page.waitForFunction(() => {
     const element = document.activeElement
@@ -117,5 +124,7 @@ export async function search(page: Page, editor: string, query: string, expected
     element.addEventListener('input', () => { host.__searchBenchmarkStart = performance.now() }, { once: true })
   })
   await page.keyboard.insertText(query)
+  // Theia commits its search term on keyup, including after a paste.
+  await page.keyboard.press('ArrowRight')
   return await waitForSearch(page, adapter, query, expectedPath)
 }

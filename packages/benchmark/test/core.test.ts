@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 import { waitForSearch, search, adapters } from '../src/adapters.ts'
+import { settleTargets } from '../src/readiness.ts'
 import { rendererJavaScriptMs, summarize } from '../src/profiles.ts'
 import { cursorWelcomeValues, prepareCursorProfile, seedCursorWelcomeState } from '../src/cursor-profile.ts'
 import { render, statistics } from '../../report/src/render.ts'
@@ -253,8 +254,28 @@ test('text search types into the focused visible control and ignores hidden edit
     assert.equal(await page.locator('#search').inputValue(), 'needle')
   } finally { await browser.close() }
 })
+test('pasted search terms reach keyup-driven search controls on repeated searches', async () => {
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
+  try {
+    const page = await browser.newPage()
+    await page.setContent(`<textarea placeholder="Search"></textarea><div id="search-in-workspace"></div><script>
+      const input = document.querySelector('textarea');
+      window.searchOpens = 0;
+      document.addEventListener('keydown', event => { if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'f') { window.searchOpens++; input.focus() } });
+      input.addEventListener('keyup', () => {
+        document.querySelector('#search-in-workspace').innerHTML = input.value ? '<div class="theia-TreeNode">target.ts <span class="match">' + input.value + '</span></div>' : '';
+      });
+    </script>`)
+    for (const query of ['first query', 'second query']) {
+      const result = await search(page, 'theia', query, 'src/target.ts')
+      assert.equal(result.query, query)
+      assert.equal(await page.locator('.match').textContent(), query)
+    }
+    assert.equal(await page.evaluate(() => (window as any).searchOpens), 1, 'Repeated measurement reuses the warmup control')
+  } finally { await browser.close() }
+})
 test('Theia search adapter identifies text-search results', () => {
-  assert.match(adapters.theia.row, /treeitem/)
+  assert.match(adapters.theia.row, /theia-TreeNode/)
 })
 test('unsupported editors are not included in the search adapter matrix', () => {
   assert.deepEqual(Object.keys(adapters).sort(), ['cursor', 'lvce', 'theia', 'vscode'])
@@ -269,8 +290,12 @@ test('Theia text search adapter reports query-qualified completion', async () =>
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN })
   try {
     const page = await browser.newPage()
-    await page.setContent('<textarea placeholder="Search" value="needle">needle</textarea><div>src/needle.ts <span class="theia-search-match">needle</span></div>')
+    await page.setContent('<textarea placeholder="Search" value="needle">needle</textarea><div>src/needle.ts <span class="match">needle</span></div><div id="search-in-workspace"></div>')
     await page.evaluate(() => { (window as any).__searchBenchmarkInput = document.querySelector('textarea') })
+    await assert.rejects(waitForSearch(page, adapters.theia, 'needle', 'src/needle.ts', 100), /timeout/)
+    await page.locator('#search-in-workspace').evaluate(element => { element.innerHTML = '<div class="theia-TreeNode">src/needle.ts <span class="match">needle</span></div><div class="theia-progress-bar">Searching</div>' })
+    await assert.rejects(waitForSearch(page, adapters.theia, 'needle', 'src/needle.ts', 100), /timeout/)
+    await page.locator('.theia-progress-bar').evaluate(element => { (element as HTMLElement).style.display = 'none' })
     const result = await waitForSearch(page, adapters.theia, 'needle', 'src/needle.ts')
     assert.equal(result.query, 'needle')
     assert.equal(result.rows, 1)
@@ -327,4 +352,29 @@ test('startup failure and timeout dispose the isolated profile and detached chil
     assert.equal(running, false, 'detached descendants must be stopped before profile cleanup')
     assert.deepEqual((await readdir(tmpdir())).filter(x => x.startsWith('quickpick-benchmark-test-cleanup-')).sort(), before)
   } finally { await rm('.tmp/apps/test-cleanup', { recursive: true, force: true }); await rm(marker, { force: true }) }
+})
+
+test('VS Code readiness waits for the lazy syntax worker beyond an initially stable target set', async () => {
+  const start = performance.now()
+  let detached = false
+  const page = { type: 'page', targetId: 'page', title: 'fixture' }
+  const worker = { type: 'worker', targetId: 'worker', title: 'TextMateWorker' }
+  const browser = { newBrowserCDPSession: async () => ({
+    send: async () => ({ targetInfos: performance.now() - start < 800 ? [page] : [page, worker] }),
+    detach: async () => { detached = true },
+  }) }
+  const result = await settleTargets(browser as any, 'vscode')
+  assert(result.targets.some(target => target.targetId === worker.targetId))
+  assert.equal(detached, true)
+})
+
+test('Cursor profile readiness includes its delayed terminal host', async () => {
+  const start = performance.now()
+  const browser = { newBrowserCDPSession: async () => ({
+    send: async () => ({ targetInfos: [{ type: 'page', targetId: 'page', title: 'fixture' }] }),
+    detach: async () => {},
+  }) }
+  const main = { send: async () => ({ result: { value: performance.now() - start < 800 ? [] : [{ pid: 42, serviceName: 'ptyHost-8' }] } }) }
+  const result = await settleTargets(browser as any, 'cursor', main as any)
+  assert(result.milliseconds >= 800, 'A stable renderer alone does not establish backend readiness')
 })

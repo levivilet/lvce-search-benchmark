@@ -57,7 +57,7 @@ export async function prepareCursorProfile(binary: string, profileDir: string, w
   const databasePath = `${profileDir}/User/globalStorage/state.vscdb`
   await mkdir(`${profileDir}/User`, { recursive: true })
   if (!hasCursorProfileDatabase(databasePath)) {
-    const process = start(binary, ['--no-sandbox', '--disable-gpu', '--disable-extensions', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', '--new-window', '--user-data-dir', profileDir, workspace], { env: environment, detached: true, stdio: 'ignore' })
+    const process = start(binary, ['--no-sandbox', '--disable-gpu', '--disable-extensions', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', '--classic', '--skip-onboarding', '--new-window', '--user-data-dir', profileDir, workspace], { env: environment, detached: true, stdio: 'ignore' })
     let spawnError: Error | undefined
     process.once('error', error => { spawnError = error })
     const interrupt = (signal: NodeJS.Signals) => {

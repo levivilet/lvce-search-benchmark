@@ -18,15 +18,15 @@ Use `--editor lvce`, `--editor vscode`, `--editor cursor`, or `--editor theia`; 
 
 ## Protocol
 
-Each trial launches the same source fixture in a fresh editor profile, with separate Chromium user data and XDG config/data/cache/state directories. Cursor gets a temporary `HOME`; other editors keep the actual home directory. The editor process tree is stopped and its profile removed on completion, launch failure, timeout, or editor crash. Runs use Xvfb and do not control an existing desktop editor. Third-party extensions, updates, and telemetry are disabled where supported.
+Each trial launches the same source fixture in a fresh editor profile, with separate Chromium user data and XDG config/data/cache/state directories. Cursor starts its classic workspace window with onboarding disabled through its supported CLI flags and gets a temporary `HOME`; other editors keep the actual home directory. The editor process tree is stopped and its profile removed on completion, launch failure, timeout, or editor crash. Runs use Xvfb and do not control an existing desktop editor. Third-party extensions, updates, and telemetry are disabled where supported.
 
-The fixed queries are `QuickOpenModel` and `editorOptions`; each has a pinned expected source path. A trial opens the editor's workspace text-search UI, enters one query, and records the visible-result update. Completion requires the exact current query in the input, an expected fixture result whose highlight contains the query, no visible busy indicator, and stable result rows across animation frames. Stale results, missing expected paths, crashes, and timeouts fail the trial. This measures a query-qualified visible update, not exhaustive filesystem-search completion or physical display latency. Each measurement mode runs separately; profile, trace, and paint instrumentation do not affect the latency pass.
+The fixed queries are `export class QuickOpenModel` and `export interface IEditorOptions`; each has a pinned expected source path. A trial opens the editor's workspace text-search UI, enters one query, and records the visible-result update. Completion requires the exact current query in the input, an expected fixture result whose highlight contains the query, no visible busy indicator, and stable result rows across animation frames. Stale results, missing expected paths, crashes, and timeouts fail the trial. This measures a query-qualified visible update, not exhaustive filesystem-search completion or physical display latency. Each measurement mode runs separately; profile, trace, and paint instrumentation do not affect the latency pass.
 
 The comparison uses the same tracked source tree and literal queries with each editor’s default search options. Editor-native case handling, exclusions, and search algorithms remain in effect and can differ. Order alternates across repetitions. The operating-system cache is not flushed, so these are warm machine-cache measurements, not cold disk-cache results.
 
 ### JavaScript profiles
 
-Profiling runs separately with V8 sampling at 1 ms:
+Profiling runs separately with V8 sampling at 1 ms. After the warmup search, VS Code must expose its lazy TextMate worker before target membership is frozen. Cursor's profiled startup must expose its terminal host, and backend process membership must settle too. Missing readiness fails the trial. The measured search still rejects any process or target membership changes:
 
 - Frontend includes discovered Chromium page, worker, iframe, and service-worker isolates, deduplicated by V8 isolate ID.
 - Renderer JavaScript reports the identified top-level application page isolate. Workers and iframes are excluded from this submetric but included in the broader frontend total.

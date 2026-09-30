@@ -30,7 +30,7 @@ export const utilityInstrumentation = (capabilities: ProfileCapabilities) => `((
   const instrument=(original,kind)=>function(file,args,options={}){
     if(!Array.isArray(args)){options=args||{};args=undefined}
     const child=original.call(this,file,args,{...options,execArgv:[...(options.execArgv||process.execArgv).filter(x=>!x.startsWith('--inspect')),'--inspect=0']});
-    const record={pid:0,file,kind,alive:true};
+    const record={pid:0,file,args,serviceName:options.serviceName,kind,alive:true};
     child.on('spawn',()=>{record.pid=child.pid;globalThis.__benchmarkProcesses.push(record)});
     child.on('exit',()=>record.alive=false);
     child.stderr?.on('data',d=>process.stderr.write(d));return child;
@@ -89,7 +89,7 @@ export async function launch(editor: Editor, profile: boolean, logPath: string, 
     ? [workspace, '--no-sandbox', '--disable-gpu', '--remote-debugging-port=0', ...(profile || traffic ? ['--inspect-brk=0'] : []), '--user-data-dir', profileDir, '--disable-extensions', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust']
     : editor.id === 'atom'
       ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--remote-debugging-port=0', ...(profile ? ['--inspect-brk=0'] : []), '--user-data-dir', profileDir, '--new-window', workspace]
-    : ['--no-sandbox', '--disable-gpu', '--remote-debugging-port=0', ...(profile || traffic ? ['--inspect-brk=0'] : []), '--user-data-dir', profileDir, '--disable-extensions', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', ...(editor.id === 'cursor' ? ['--new-window'] : []), workspace]
+    : ['--no-sandbox', '--disable-gpu', '--remote-debugging-port=0', ...(profile || traffic ? ['--inspect-brk=0'] : []), '--user-data-dir', profileDir, '--disable-extensions', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', ...(editor.id === 'cursor' ? ['--classic', '--skip-onboarding', '--new-window'] : []), workspace]
   if (editor.id === 'cursor') {
     try { await prepareCursorProfile(resolve(`.tmp/apps/${editor.id}/${editor.binary}`), profileDir, workspace, env) }
     catch (error) { await rm(root, { recursive: true, force: true }); throw error }
